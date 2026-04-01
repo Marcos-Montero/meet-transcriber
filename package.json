@@ -1,26 +1,55 @@
 {
   "name": "meet-transcriber",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
+  "main": "out/main/main.mjs",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "dist": "electron-vite build && electron-builder --mac",
     "lint": "eslint"
   },
   "dependencies": {
-    "next": "16.2.2",
+    "@anthropic-ai/sdk": "^0.81.0",
+    "@deepgram/sdk": "^5.0.0",
+    "dotenv": "^17.3.1",
+    "pg": "^8.20.0",
     "react": "19.2.4",
     "react-dom": "19.2.4"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "^4",
+    "@tailwindcss/vite": "^4.2.2",
     "@types/node": "^20",
+    "@types/pg": "^8.20.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^6.0.1",
+    "electron": "^41.1.1",
+    "electron-builder": "^26.8.1",
+    "electron-vite": "^5.0.0",
     "eslint": "^9",
-    "eslint-config-next": "16.2.2",
-    "tailwindcss": "^4",
-    "typescript": "^5"
+    "tailwindcss": "^4.2.2",
+    "typescript": "^5",
+    "vite": "^8.0.3"
+  },
+  "build": {
+    "appId": "com.marcosmontero.meet-transcriber",
+    "productName": "Meet Transcriber",
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": "dmg"
+    },
+    "files": [
+      "out/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": ".env.local",
+        "to": ".env.local"
+      }
+    ],
+    "directories": {
+      "output": "release"
+    }
   }
 }

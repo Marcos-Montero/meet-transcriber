@@ -1,0 +1,41 @@
+@import "tailwindcss";
+@source "../";
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+/* Only the header bar is draggable for window movement */
+[data-drag-region] {
+  -webkit-app-region: drag;
+}
+
+[data-drag-region] button,
+[data-drag-region] input,
+[data-drag-region] a {
+  -webkit-app-region: no-drag;
+}
+
+/* Custom scrollbar for dark mode */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #3f3f46 transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #3f3f46;
+  border-radius: 3px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: #52525b;
+}
