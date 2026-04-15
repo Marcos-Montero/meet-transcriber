@@ -2,12 +2,15 @@ import { config } from "dotenv";
 import { app, BrowserWindow, ipcMain, dialog } from "electron";
 import * as path from "path";
 import { fileURLToPath } from "url";
+import { createRequire } from "module";
 import { readFile } from "fs/promises";
-import electronUpdater from "electron-updater";
-const { autoUpdater } = electronUpdater;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// electron-updater is CommonJS; require it to avoid ESM interop issues in the bundled output
+const require = createRequire(import.meta.url);
+const { autoUpdater } = require("electron-updater");
 
 // Load .env.local from app root (dev) or resources (prod)
 config({ path: path.join(app.isPackaged ? process.resourcesPath : process.cwd(), ".env.local") });
