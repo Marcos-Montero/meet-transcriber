@@ -30,6 +30,7 @@ export async function initDb(connectionString: string) {
     `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS profile_id TEXT DEFAULT 'marcos'`,
     `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS folder_id TEXT`,
     `CREATE TABLE IF NOT EXISTS folders (id TEXT PRIMARY KEY, name TEXT NOT NULL, profile_id TEXT NOT NULL, created_at BIGINT NOT NULL)`,
+    `ALTER TABLE folders ADD COLUMN IF NOT EXISTS parent_id TEXT`,
   ];
 
   for (const sql of migrations) {
@@ -203,14 +204,15 @@ export async function getFolders(profileId: string): Promise<Folder[]> {
     id: r.id,
     name: r.name,
     profileId: r.profile_id,
+    parentId: r.parent_id ?? null,
     createdAt: Number(r.created_at),
   }));
 }
 
 export async function createFolder(folder: Folder): Promise<void> {
   await pool.query(
-    `INSERT INTO folders (id, name, profile_id, created_at) VALUES ($1, $2, $3, $4)`,
-    [folder.id, folder.name, folder.profileId, folder.createdAt]
+    `INSERT INTO folders (id, name, profile_id, parent_id, created_at) VALUES ($1, $2, $3, $4, $5)`,
+    [folder.id, folder.name, folder.profileId, folder.parentId ?? null, folder.createdAt]
   );
 }
 
@@ -218,8 +220,20 @@ export async function renameFolder(id: string, name: string): Promise<void> {
   await pool.query(`UPDATE folders SET name = $1 WHERE id = $2`, [name, id]);
 }
 
+export async function moveFolder(id: string, parentId: string | null): Promise<void> {
+  await pool.query(`UPDATE folders SET parent_id = $1 WHERE id = $2`, [parentId, id]);
+}
+
 export async function deleteFolder(id: string): Promise<void> {
-  // Move conversations out of folder before deleting
-  await pool.query(`UPDATE conversations SET folder_id = NULL WHERE folder_id = $1`, [id]);
+  // Find this folder's parent so we can reparent children up one level
+  const { rows } = await pool.query(`SELECT parent_id FROM folders WHERE id = $1`, [id]);
+  const grandparent = rows[0]?.parent_id ?? null;
+
+  // Move sub-folders up to the grandparent (or root)
+  await pool.query(`UPDATE folders SET parent_id = $1 WHERE parent_id = $2`, [grandparent, id]);
+
+  // Move conversations into the grandparent (or out of folders if grandparent is null)
+  await pool.query(`UPDATE conversations SET folder_id = $1 WHERE folder_id = $2`, [grandparent, id]);
+
   await pool.query(`DELETE FROM folders WHERE id = $1`, [id]);
 }

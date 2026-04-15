@@ -50,6 +50,7 @@ export interface Folder {
   id: string;
   name: string;
   profileId: string;
+  parentId: string | null;
   createdAt: number;
 }
 

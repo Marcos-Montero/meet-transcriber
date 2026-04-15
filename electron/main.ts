@@ -31,6 +31,7 @@ import {
   getFolders,
   createFolder,
   renameFolder,
+  moveFolder,
   deleteFolder,
 } from "./db";
 import { scanForPostgres, testPostgresConnection } from "./discovery";
@@ -139,6 +140,7 @@ ipcMain.handle("db:move-to-folder", (_e, convId: string, folderId: string | null
 ipcMain.handle("folders:list", (_e, profileId: string) => getFolders(profileId));
 ipcMain.handle("folders:create", (_e, folder) => createFolder(folder));
 ipcMain.handle("folders:rename", (_e, id: string, name: string) => renameFolder(id, name));
+ipcMain.handle("folders:move", (_e, id: string, parentId: string | null) => moveFolder(id, parentId));
 ipcMain.handle("folders:delete", (_e, id: string) => deleteFolder(id));
 
 // ── NAS Discovery & Config ──────────────────────────────────

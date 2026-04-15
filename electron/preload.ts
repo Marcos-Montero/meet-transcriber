@@ -88,6 +88,8 @@ const api = {
       ipcRenderer.invoke("folders:create", folder),
     rename: (id: string, name: string): Promise<void> =>
       ipcRenderer.invoke("folders:rename", id, name),
+    move: (id: string, parentId: string | null): Promise<void> =>
+      ipcRenderer.invoke("folders:move", id, parentId),
     delete: (id: string): Promise<void> =>
       ipcRenderer.invoke("folders:delete", id),
   },

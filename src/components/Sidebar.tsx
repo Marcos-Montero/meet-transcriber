@@ -70,12 +70,32 @@ export default function Sidebar({
       id: crypto.randomUUID(),
       name: "New Folder",
       profileId,
+      parentId: null,
       createdAt: Date.now(),
     };
     await window.api.folders.create(folder);
     setFolders((prev) => [...prev, folder]);
     setEditingFolderId(folder.id);
     setFolderEditValue("New Folder");
+  };
+
+  // Check if potentialAncestor is an ancestor of folderId (or same folder)
+  const isFolderAncestor = (folderId: string, potentialAncestor: string): boolean => {
+    if (folderId === potentialAncestor) return true;
+    const folder = folders.find((f) => f.id === folderId);
+    if (!folder || !folder.parentId) return false;
+    return isFolderAncestor(folder.parentId, potentialAncestor);
+  };
+
+  const handleDropFolder = async (folderId: string, targetParentId: string | null) => {
+    // Prevent dropping a folder into itself or its descendants
+    if (targetParentId && isFolderAncestor(targetParentId, folderId)) {
+      setDragOverFolderId(null);
+      return;
+    }
+    await window.api.folders.move(folderId, targetParentId);
+    setFolders((prev) => prev.map((f) => f.id === folderId ? { ...f, parentId: targetParentId } : f));
+    setDragOverFolderId(null);
   };
 
   const commitFolderRename = async () => {
@@ -113,15 +133,11 @@ export default function Sidebar({
     setDeleteConfirmId(null);
   };
 
-  // Group conversations by folder
-  const unfolderedConvs = conversations.filter((c) => !c.folderId);
-  const folderConvs = (fId: string) => conversations.filter((c) => c.folderId === fId);
-
   const renderConversation = (conv: Conversation) => (
     <div
       key={conv.id}
       draggable
-      onDragStart={(e) => e.dataTransfer.setData("convId", conv.id)}
+      onDragStart={(e) => { e.dataTransfer.setData("convId", conv.id); e.stopPropagation(); }}
       onClick={() => onSelect(conv.id)}
       className={`group px-3 py-2.5 cursor-pointer border-b border-zinc-800/30 transition-colors ${
         activeId === conv.id ? "bg-zinc-800" : "hover:bg-zinc-800/50"
@@ -163,6 +179,82 @@ export default function Sidebar({
     </div>
   );
 
+  const renderFolder = (folder: Folder) => {
+    const childFolders = folders.filter((f) => f.parentId === folder.id);
+    const folderItems = conversations.filter((c) => c.folderId === folder.id);
+    const isCollapsed = collapsedFolders.has(folder.id);
+    const isDragOver = dragOverFolderId === folder.id;
+    const hasChildren = childFolders.length > 0 || folderItems.length > 0;
+
+    return (
+      <div key={folder.id}>
+        <div
+          draggable
+          onDragStart={(e) => { e.dataTransfer.setData("folderId", folder.id); e.stopPropagation(); }}
+          className={`flex items-center gap-1.5 px-3 py-1.5 cursor-pointer transition-colors group ${
+            isDragOver ? "bg-indigo-500/10" : "hover:bg-zinc-800/50"
+          }`}
+          onClick={() => toggleFolder(folder.id)}
+          onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDragOverFolderId(folder.id); }}
+          onDragLeave={(e) => { e.stopPropagation(); setDragOverFolderId(null); }}
+          onDrop={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const convId = e.dataTransfer.getData("convId");
+            const draggedFolderId = e.dataTransfer.getData("folderId");
+            if (convId) handleDrop(convId, folder.id);
+            else if (draggedFolderId && draggedFolderId !== folder.id) {
+              handleDropFolder(draggedFolderId, folder.id);
+            }
+          }}
+        >
+          <svg className={`w-3 h-3 text-zinc-500 transition-transform ${isCollapsed ? "" : "rotate-90"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+          </svg>
+          <svg className="w-3.5 h-3.5 text-amber-500/70 shrink-0" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" />
+          </svg>
+
+          {editingFolderId === folder.id ? (
+            <input
+              autoFocus
+              value={folderEditValue}
+              onChange={(e) => setFolderEditValue(e.target.value)}
+              onBlur={commitFolderRename}
+              onKeyDown={(e) => { if (e.key === "Enter") commitFolderRename(); if (e.key === "Escape") setEditingFolderId(null); }}
+              onClick={(e) => e.stopPropagation()}
+              className="flex-1 bg-zinc-700 text-zinc-200 text-[11px] px-1.5 py-0.5 rounded outline-none border border-zinc-500 focus:border-indigo-400"
+            />
+          ) : (
+            <span className="text-[11px] text-zinc-300 font-medium flex-1 truncate">{folder.name}</span>
+          )}
+
+          <span className="text-[9px] text-zinc-600">{folderItems.length + childFolders.length}</span>
+
+          <div className="opacity-0 group-hover:opacity-100 flex gap-1 transition-opacity">
+            <button onClick={(e) => { e.stopPropagation(); setEditingFolderId(folder.id); setFolderEditValue(folder.name); }} className="text-[9px] text-zinc-500 hover:text-zinc-300">
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487z" /></svg>
+            </button>
+            <button onClick={(e) => { e.stopPropagation(); handleDeleteFolder(folder.id); }} className="text-[9px] text-red-400 hover:text-red-300">
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+            </button>
+          </div>
+        </div>
+
+        {!isCollapsed && hasChildren && (
+          <div className="ml-[13px] border-l border-zinc-700/40">
+            {childFolders.map(renderFolder)}
+            {folderItems.map(renderConversation)}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // Root-level items (no parent)
+  const rootFolders = folders.filter((f) => !f.parentId);
+  const rootConvs = conversations.filter((c) => !c.folderId);
+
   return (
     <>
       <aside className="w-64 border-r border-zinc-800 bg-zinc-900 flex flex-col h-full shrink-0">
@@ -186,12 +278,13 @@ export default function Sidebar({
 
         <div
           className="flex-1 overflow-y-auto"
-          onDragOver={(e) => { e.preventDefault(); setDragOverFolderId("root"); }}
-          onDragLeave={() => setDragOverFolderId(null)}
+          onDragOver={(e) => { e.preventDefault(); }}
           onDrop={(e) => {
             e.preventDefault();
             const convId = e.dataTransfer.getData("convId");
+            const draggedFolderId = e.dataTransfer.getData("folderId");
             if (convId) handleDrop(convId, null);
+            else if (draggedFolderId) handleDropFolder(draggedFolderId, null);
           }}
         >
           {conversations.length === 0 && folders.length === 0 && (
@@ -200,68 +293,8 @@ export default function Sidebar({
             </p>
           )}
 
-          {/* Folders */}
-          {folders.map((folder) => {
-            const folderItems = folderConvs(folder.id);
-            const isCollapsed = collapsedFolders.has(folder.id);
-            const isDragOver = dragOverFolderId === folder.id;
-
-            return (
-              <div key={folder.id}>
-                <div
-                  className={`flex items-center gap-1.5 px-3 py-1.5 cursor-pointer transition-colors group ${
-                    isDragOver ? "bg-indigo-500/10" : "hover:bg-zinc-800/50"
-                  }`}
-                  onClick={() => toggleFolder(folder.id)}
-                  onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDragOverFolderId(folder.id); }}
-                  onDragLeave={(e) => { e.stopPropagation(); setDragOverFolderId(null); }}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    const convId = e.dataTransfer.getData("convId");
-                    if (convId) handleDrop(convId, folder.id);
-                  }}
-                >
-                  <svg className={`w-3 h-3 text-zinc-500 transition-transform ${isCollapsed ? "" : "rotate-90"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
-                  </svg>
-                  <svg className="w-3.5 h-3.5 text-amber-500/70" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" />
-                  </svg>
-
-                  {editingFolderId === folder.id ? (
-                    <input
-                      autoFocus
-                      value={folderEditValue}
-                      onChange={(e) => setFolderEditValue(e.target.value)}
-                      onBlur={commitFolderRename}
-                      onKeyDown={(e) => { if (e.key === "Enter") commitFolderRename(); if (e.key === "Escape") setEditingFolderId(null); }}
-                      onClick={(e) => e.stopPropagation()}
-                      className="flex-1 bg-zinc-700 text-zinc-200 text-[11px] px-1.5 py-0.5 rounded outline-none border border-zinc-500 focus:border-indigo-400"
-                    />
-                  ) : (
-                    <span className="text-[11px] text-zinc-300 font-medium flex-1 truncate">{folder.name}</span>
-                  )}
-
-                  <span className="text-[9px] text-zinc-600">{folderItems.length}</span>
-
-                  <div className="opacity-0 group-hover:opacity-100 flex gap-1 transition-opacity">
-                    <button onClick={(e) => { e.stopPropagation(); setEditingFolderId(folder.id); setFolderEditValue(folder.name); }} className="text-[9px] text-zinc-500 hover:text-zinc-300">
-                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487z" /></svg>
-                    </button>
-                    <button onClick={(e) => { e.stopPropagation(); handleDeleteFolder(folder.id); }} className="text-[9px] text-red-400 hover:text-red-300">
-                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
-                    </button>
-                  </div>
-                </div>
-
-                {!isCollapsed && folderItems.map(renderConversation)}
-              </div>
-            );
-          })}
-
-          {/* Unfoldered conversations */}
-          {unfolderedConvs.map(renderConversation)}
+          {rootFolders.map(renderFolder)}
+          {rootConvs.map(renderConversation)}
         </div>
 
         {/* Profile footer */}
