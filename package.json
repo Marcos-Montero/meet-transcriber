@@ -1,18 +1,24 @@
 {
-  "name": "meet-transcriber",
-  "version": "1.0.0",
+  "name": "comeet",
+  "version": "1.0.1",
+  "description": "Meeting transcription app with speaker recognition and AI analysis",
+  "author": "Marcos Montero",
   "private": true,
   "main": "out/main/main.mjs",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "dist": "electron-vite build && electron-builder --mac",
+    "dist": "electron-vite build && electron-builder --mac --arm64 --x64",
+    "release:patch": "npm version patch && git push && git push --tags",
+    "release:minor": "npm version minor && git push && git push --tags",
+    "release:major": "npm version major && git push && git push --tags",
     "lint": "eslint"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.81.0",
     "@deepgram/sdk": "^5.0.0",
     "dotenv": "^17.3.1",
+    "electron-updater": "^6.8.3",
     "pg": "^8.20.0",
     "react": "19.2.4",
     "react-dom": "19.2.4"
@@ -33,11 +39,20 @@
     "vite": "^8.0.3"
   },
   "build": {
-    "appId": "com.marcosmontero.meet-transcriber",
-    "productName": "Meet Transcriber",
+    "appId": "com.marcosmontero.comeet",
+    "productName": "Comeet",
     "mac": {
       "category": "public.app-category.productivity",
-      "target": "dmg"
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png"
     },
     "files": [
       "out/**/*"
@@ -50,6 +65,11 @@
     ],
     "directories": {
       "output": "release"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "Marcos-Montero",
+      "repo": "meet-transcriber"
     }
   }
 }

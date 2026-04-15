@@ -1,5 +1,5 @@
 import pg from "pg";
-import type { Conversation } from "../src/types";
+import type { Conversation, Profile, Folder } from "../src/types";
 
 const { Pool } = pg;
 
@@ -12,47 +12,67 @@ export async function initDb(connectionString: string) {
 
   pool = new Pool({ connectionString });
 
+  // Test connection first
+  await pool.query("SELECT 1");
+  console.log("[db] Connected to PostgreSQL");
+
+  const migrations = [
+    `CREATE TABLE IF NOT EXISTS profiles (id TEXT PRIMARY KEY, name TEXT NOT NULL, pin TEXT NOT NULL, color TEXT NOT NULL)`,
+    `CREATE TABLE IF NOT EXISTS conversations (id TEXT PRIMARY KEY, title TEXT NOT NULL, duration REAL NOT NULL DEFAULT 0, summary TEXT DEFAULT '', speaker_names JSONB DEFAULT '{}', created_at BIGINT NOT NULL)`,
+    `CREATE TABLE IF NOT EXISTS utterances (id SERIAL PRIMARY KEY, conversation_id TEXT REFERENCES conversations(id) ON DELETE CASCADE, speaker INTEGER NOT NULL, text TEXT NOT NULL, start_time REAL NOT NULL, end_time REAL NOT NULL, sort_order INTEGER NOT NULL)`,
+    `CREATE TABLE IF NOT EXISTS topics (id SERIAL PRIMARY KEY, conversation_id TEXT REFERENCES conversations(id) ON DELETE CASCADE, topic TEXT NOT NULL, percentage REAL NOT NULL, color TEXT NOT NULL)`,
+    `CREATE INDEX IF NOT EXISTS idx_utterances_conv ON utterances(conversation_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_topics_conv ON topics(conversation_id)`,
+    `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS action_points JSONB DEFAULT '[]'`,
+    `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS sentiments JSONB DEFAULT '[]'`,
+    `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS tags JSONB DEFAULT '[]'`,
+    `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS topic_segments JSONB DEFAULT '[]'`,
+    `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS profile_id TEXT DEFAULT 'marcos'`,
+    `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS folder_id TEXT`,
+    `CREATE TABLE IF NOT EXISTS folders (id TEXT PRIMARY KEY, name TEXT NOT NULL, profile_id TEXT NOT NULL, created_at BIGINT NOT NULL)`,
+  ];
+
+  for (const sql of migrations) {
+    await pool.query(sql);
+  }
+  console.log("[db] Schema ready");
+
+  // Seed profiles if they don't exist
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS conversations (
-      id TEXT PRIMARY KEY,
-      title TEXT NOT NULL,
-      duration REAL NOT NULL DEFAULT 0,
-      summary TEXT DEFAULT '',
-      speaker_names JSONB DEFAULT '{}',
-      created_at BIGINT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS utterances (
-      id SERIAL PRIMARY KEY,
-      conversation_id TEXT REFERENCES conversations(id) ON DELETE CASCADE,
-      speaker INTEGER NOT NULL,
-      text TEXT NOT NULL,
-      start_time REAL NOT NULL,
-      end_time REAL NOT NULL,
-      sort_order INTEGER NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS topics (
-      id SERIAL PRIMARY KEY,
-      conversation_id TEXT REFERENCES conversations(id) ON DELETE CASCADE,
-      topic TEXT NOT NULL,
-      percentage REAL NOT NULL,
-      color TEXT NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_utterances_conv ON utterances(conversation_id);
-    CREATE INDEX IF NOT EXISTS idx_topics_conv ON topics(conversation_id);
-
-    ALTER TABLE conversations ADD COLUMN IF NOT EXISTS action_points JSONB DEFAULT '[]';
-    ALTER TABLE conversations ADD COLUMN IF NOT EXISTS sentiments JSONB DEFAULT '[]';
-    ALTER TABLE conversations ADD COLUMN IF NOT EXISTS tags JSONB DEFAULT '[]';
-    ALTER TABLE conversations ADD COLUMN IF NOT EXISTS topic_segments JSONB DEFAULT '[]';
+    INSERT INTO profiles (id, name, pin, color)
+    VALUES ('marcos', 'Marcos', '0000', '#6366f1'),
+           ('dasha', 'Dasha', '0000', '#ec4899')
+    ON CONFLICT (id) DO NOTHING;
   `);
 }
 
-export async function getConversations(): Promise<Conversation[]> {
+// ── Profiles ─────────────────────────────────────────────────
+export async function getProfiles(): Promise<Profile[]> {
+  const { rows } = await pool.query(`SELECT * FROM profiles ORDER BY name`);
+  return rows;
+}
+
+export async function verifyPin(profileId: string, pin: string): Promise<boolean> {
   const { rows } = await pool.query(
-    `SELECT * FROM conversations ORDER BY created_at DESC`
+    `SELECT 1 FROM profiles WHERE id = $1 AND pin = $2`,
+    [profileId, pin]
+  );
+  return rows.length > 0;
+}
+
+export async function updatePin(profileId: string, newPin: string): Promise<void> {
+  await pool.query(`UPDATE profiles SET pin = $1 WHERE id = $2`, [newPin, profileId]);
+}
+
+export async function updateProfileName(profileId: string, name: string): Promise<void> {
+  await pool.query(`UPDATE profiles SET name = $1 WHERE id = $2`, [name, profileId]);
+}
+
+// ── Conversations ────────────────────────────────────────────
+export async function getConversations(profileId: string): Promise<Conversation[]> {
+  const { rows } = await pool.query(
+    `SELECT * FROM conversations WHERE profile_id = $1 ORDER BY created_at DESC`,
+    [profileId]
   );
   const conversations: Conversation[] = [];
   for (const row of rows) {
@@ -86,6 +106,8 @@ async function hydrateConversation(row: any): Promise<Conversation> {
     duration: row.duration,
     summary: row.summary,
     speakerNames: row.speaker_names || {},
+    folderId: row.folder_id || null,
+    profileId: row.profile_id || "marcos",
     createdAt: Number(row.created_at),
     utterances: uttRows.map((u: { speaker: number; text: string; start_time: number; end_time: number }) => ({
       speaker: u.speaker,
@@ -111,8 +133,8 @@ export async function createConversation(conv: Conversation): Promise<void> {
     await client.query("BEGIN");
 
     await client.query(
-      `INSERT INTO conversations (id, title, duration, summary, speaker_names, created_at, action_points, sentiments, tags, topic_segments)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      `INSERT INTO conversations (id, title, duration, summary, speaker_names, created_at, action_points, sentiments, tags, topic_segments, profile_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
       [
         conv.id, conv.title, conv.duration, conv.summary,
         JSON.stringify(conv.speakerNames), conv.createdAt,
@@ -120,6 +142,7 @@ export async function createConversation(conv: Conversation): Promise<void> {
         JSON.stringify(conv.sentiments || []),
         JSON.stringify(conv.tags || []),
         JSON.stringify(conv.topicSegments || []),
+        conv.profileId,
       ]
     );
 
@@ -164,4 +187,39 @@ export async function updateConversation(conv: Conversation): Promise<void> {
 
 export async function deleteConversation(id: string): Promise<void> {
   await pool.query(`DELETE FROM conversations WHERE id = $1`, [id]);
+}
+
+export async function moveConversationToFolder(convId: string, folderId: string | null): Promise<void> {
+  await pool.query(`UPDATE conversations SET folder_id = $2 WHERE id = $1`, [convId, folderId]);
+}
+
+// ── Folders ──────────────────────────────────────────────────
+export async function getFolders(profileId: string): Promise<Folder[]> {
+  const { rows } = await pool.query(
+    `SELECT * FROM folders WHERE profile_id = $1 ORDER BY created_at`,
+    [profileId]
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    profileId: r.profile_id,
+    createdAt: Number(r.created_at),
+  }));
+}
+
+export async function createFolder(folder: Folder): Promise<void> {
+  await pool.query(
+    `INSERT INTO folders (id, name, profile_id, created_at) VALUES ($1, $2, $3, $4)`,
+    [folder.id, folder.name, folder.profileId, folder.createdAt]
+  );
+}
+
+export async function renameFolder(id: string, name: string): Promise<void> {
+  await pool.query(`UPDATE folders SET name = $1 WHERE id = $2`, [name, id]);
+}
+
+export async function deleteFolder(id: string): Promise<void> {
+  // Move conversations out of folder before deleting
+  await pool.query(`UPDATE conversations SET folder_id = NULL WHERE folder_id = $1`, [id]);
+  await pool.query(`DELETE FROM folders WHERE id = $1`, [id]);
 }

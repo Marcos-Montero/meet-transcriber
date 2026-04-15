@@ -37,16 +37,32 @@ export interface TopicSegment {
   color: string;
 }
 
-export type ConversationTab = "conversation" | "action-points" | "topics" | "summary";
+export type ConversationTab = "summary" | "action-points" | "conversation";
+
+export interface Profile {
+  id: string;
+  name: string;
+  pin: string;
+  color: string;
+}
+
+export interface Folder {
+  id: string;
+  name: string;
+  profileId: string;
+  createdAt: number;
+}
 
 export interface Conversation {
   id: string;
   title: string;
+  folderId?: string | null;
   utterances: Utterance[];
   duration: number;
   topics: TopicStat[];
   summary: string;
   speakerNames: Record<number, string>;
+  profileId: string;
   createdAt: number;
   actionPoints?: ActionPoint[];
   sentiments?: SpeakerSentiment[];

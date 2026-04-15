@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <radialGradient id="bg" cx="0.2" cy="0.8" r="1.2" fx="0.1" fy="0.9">
+      <stop offset="0%" stop-color="#84cc16"/>
+      <stop offset="30%" stop-color="#14b8a6"/>
+      <stop offset="60%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#8b5cf6"/>
+    </radialGradient>
+    <!-- Tapered lines: thick on right (near mic), thin on left -->
+    <linearGradient id="line1" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="white" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="white" stop-opacity="0.9"/>
+    </linearGradient>
+    <linearGradient id="line2" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="white" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="white" stop-opacity="0.8"/>
+    </linearGradient>
+    <linearGradient id="line3" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="white" stop-opacity="0.2"/>
+      <stop offset="100%" stop-color="white" stop-opacity="0.7"/>
+    </linearGradient>
+    <linearGradient id="line4" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="white" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="white" stop-opacity="0.6"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background rounded square -->
+  <rect width="512" height="512" rx="110" fill="url(#bg)"/>
+
+  <!-- Group: rotated slightly right -->
+  <g transform="translate(256,256) rotate(15) translate(-256,-256)">
+
+    <!-- Full microphone body -->
+    <rect x="250" y="80" width="90" height="220" rx="45" fill="white" opacity="0.95"/>
+
+    <!-- Mic grille lines -->
+    <line x1="275" y1="125" x2="340" y2="125" stroke="#4f46e5" stroke-width="4" stroke-linecap="round" opacity="0.25"/>
+    <line x1="275" y1="150" x2="340" y2="150" stroke="#4f46e5" stroke-width="4" stroke-linecap="round" opacity="0.25"/>
+    <line x1="275" y1="175" x2="340" y2="175" stroke="#4f46e5" stroke-width="4" stroke-linecap="round" opacity="0.25"/>
+    <line x1="275" y1="200" x2="340" y2="200" stroke="#4f46e5" stroke-width="4" stroke-linecap="round" opacity="0.25"/>
+    <line x1="275" y1="225" x2="340" y2="225" stroke="#4f46e5" stroke-width="4" stroke-linecap="round" opacity="0.25"/>
+    <line x1="275" y1="250" x2="340" y2="250" stroke="#4f46e5" stroke-width="4" stroke-linecap="round" opacity="0.25"/>
+
+    <!-- Mic arc holder -->
+    <path d="M210 280 Q210 370 295 370" fill="none" stroke="white" stroke-width="14" stroke-linecap="round" opacity="0.9"/>
+    <path d="M380 280 Q380 370 295 370" fill="none" stroke="white" stroke-width="14" stroke-linecap="round" opacity="0.9"/>
+
+    <!-- Mic stand -->
+    <line x1="295" y1="370" x2="295" y2="420" stroke="white" stroke-width="14" stroke-linecap="round" opacity="0.9"/>
+
+    <!-- Mic base -->
+    <line x1="250" y1="420" x2="340" y2="420" stroke="white" stroke-width="14" stroke-linecap="round" opacity="0.9"/>
+
+    <!-- 4 speed lines: tapered polygons (wide near mic, thin at left) -->
+    <polygon points="240,147 240,153 45,151 45,149" fill="url(#line1)"/>
+    <polygon points="245,197 245,205 55,202 55,200" fill="url(#line2)"/>
+    <polygon points="242,247 242,257 65,254 65,250" fill="url(#line3)"/>
+    <polygon points="235,297 235,309 85,306 85,300" fill="url(#line4)"/>
+  </g>
+</svg>

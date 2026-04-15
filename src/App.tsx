@@ -1,40 +1,51 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import FileUpload from "./components/FileUpload";
 import ChatView from "./components/ChatView";
 import TabBar from "./components/TabBar";
 import ActionPointsView from "./components/ActionPointsView";
-import TopicsView from "./components/TopicsView";
 import SummaryView from "./components/SummaryView";
 import TopicTimeline from "./components/TopicTimeline";
 import Sidebar from "./components/Sidebar";
 import NasSetup from "./components/NasSetup";
+import ProfileSelect from "./components/ProfileSelect";
+import ImportTranscript from "./components/ImportTranscript";
+import UpdateBanner from "./components/UpdateBanner";
 import type { Utterance, Conversation, ConversationTab } from "./types";
 
 type ConnectionState = "checking" | "setup" | "connected";
-type AppState = "idle" | "transcribing" | "analyzing";
+type AppState = "idle" | "transcribing";
 
 export default function App() {
   const [connState, setConnState] = useState<ConnectionState>("checking");
+  const [profileId, setProfileId] = useState<string | null>(null);
+  const [profileName, setProfileName] = useState("");
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [appState, setAppState] = useState<AppState>("idle");
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<ConversationTab>("conversation");
   const [scrollToTime, setScrollToTime] = useState<number | null>(null);
+  const [analyzingIds, setAnalyzingIds] = useState<Set<string>>(new Set());
+  const [retrying, setRetrying] = useState(false);
+  const conversationsRef = useRef(conversations);
+  conversationsRef.current = conversations;
 
-  // Reset tab when switching conversations
+  // When switching conversations, default to summary if it exists
   useEffect(() => {
-    setActiveTab("conversation");
     setScrollToTime(null);
+    if (!activeId) return;
+    const conv = conversations.find((c) => c.id === activeId);
+    if (conv?.summary) {
+      setActiveTab("summary");
+    } else {
+      setActiveTab("conversation");
+    }
   }, [activeId]);
 
   // On mount: try loading saved NAS config
   useEffect(() => {
     window.api.nas.loadConfig().then(async ({ connected }) => {
       if (connected) {
-        const loaded = await window.api.db.list();
-        setConversations(loaded);
-        if (loaded.length > 0) setActiveId(loaded[0].id);
         setConnState("connected");
       } else {
         setConnState("setup");
@@ -43,13 +54,36 @@ export default function App() {
   }, []);
 
   const handleNasConnected = useCallback(async () => {
-    const loaded = await window.api.db.list();
-    setConversations(loaded);
-    if (loaded.length > 0) setActiveId(loaded[0].id);
     setConnState("connected");
   }, []);
 
+  // After profile selected, load conversations
+  const handleProfileSelected = useCallback(async (id: string) => {
+    setProfileId(id);
+    const profiles = await window.api.profiles.list();
+    const p = profiles.find((pr) => pr.id === id);
+    setProfileName(p?.name || id);
+    const loaded = await window.api.db.list(id);
+    setConversations(loaded);
+    if (loaded.length > 0) setActiveId(loaded[0].id);
+  }, []);
+
+  const handleLogout = useCallback(() => {
+    setProfileId(null);
+    setConversations([]);
+    setActiveId(null);
+    setAppState("idle");
+  }, []);
+
   const activeConversation = conversations.find((c) => c.id === activeId) ?? null;
+  const isAnalyzing = activeId ? analyzingIds.has(activeId) : false;
+
+  const refreshConversations = useCallback(async () => {
+    if (!profileId) return [];
+    const refreshed = await window.api.db.list(profileId);
+    setConversations(refreshed);
+    return refreshed;
+  }, [profileId]);
 
   const handleRenameSpeaker = useCallback(
     async (speaker: number, name: string) => {
@@ -59,77 +93,90 @@ export default function App() {
         speakerNames: { ...activeConversation.speakerNames, [speaker]: name },
       };
       await window.api.db.update(updated);
-      const refreshed = await window.api.db.list();
-      setConversations(refreshed);
+      await refreshConversations();
     },
-    [activeConversation]
+    [activeConversation, refreshConversations]
   );
 
   const handleRenameConversation = useCallback(async (id: string, title: string) => {
     const conv = conversations.find((c) => c.id === id);
     if (!conv) return;
     await window.api.db.update({ ...conv, title });
-    const refreshed = await window.api.db.list();
-    setConversations(refreshed);
-  }, [conversations]);
+    await refreshConversations();
+  }, [conversations, refreshConversations]);
 
   const handleDeleteConversation = useCallback(
     async (id: string) => {
       await window.api.db.delete(id);
-      const refreshed = await window.api.db.list();
-      setConversations(refreshed);
+      const refreshed = await refreshConversations();
       if (activeId === id) {
         setActiveId(refreshed.length > 0 ? refreshed[0].id : null);
       }
     },
-    [activeId]
+    [activeId, refreshConversations]
   );
+
+  const [showImport, setShowImport] = useState(false);
+  const [importing, setImporting] = useState(false);
 
   const handleNew = useCallback(() => {
     setActiveId(null);
     setError(null);
   }, []);
 
-  const [retrying, setRetrying] = useState(false);
+  const runAnalysis = useCallback(async (convId: string, utterances: Utterance[], duration: number) => {
+    setAnalyzingIds((prev) => new Set(prev).add(convId));
+
+    try {
+      const fullText = utterances
+        .map((u) => `[${u.start.toFixed(1)}-${u.end.toFixed(1)}] Speaker ${u.speaker + 1}: ${u.text}`)
+        .join("\n");
+
+      const analysis = await window.api.analyze(fullText, duration);
+
+      const conv = await window.api.db.get(convId);
+      if (!conv) return;
+
+      const updated: Conversation = {
+        ...conv,
+        topics: analysis.topics || [],
+        summary: analysis.summary || "",
+        actionPoints: analysis.actionPoints || [],
+        sentiments: analysis.sentiments || [],
+        tags: analysis.tags || [],
+        topicSegments: analysis.topicSegments || [],
+      };
+
+      await window.api.db.update(updated);
+      await refreshConversations();
+    } catch (err) {
+      console.error("Analysis failed:", err);
+    } finally {
+      setAnalyzingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(convId);
+        return next;
+      });
+    }
+  }, [refreshConversations]);
 
   const handleRetryAnalysis = useCallback(async () => {
     if (!activeConversation || retrying) return;
     setRetrying(true);
-
     try {
-      const fullText = activeConversation.utterances
-        .map((u) => `[${u.start.toFixed(1)}-${u.end.toFixed(1)}] Speaker ${u.speaker + 1}: ${u.text}`)
-        .join("\n");
-
-      const analysis = await window.api.analyze(fullText, activeConversation.duration);
-
-      const updated: Conversation = {
-        ...activeConversation,
-        topics: analysis.topics || activeConversation.topics,
-        summary: analysis.summary || activeConversation.summary,
-        actionPoints: analysis.actionPoints || activeConversation.actionPoints,
-        sentiments: analysis.sentiments || activeConversation.sentiments,
-        tags: analysis.tags || activeConversation.tags,
-        topicSegments: analysis.topicSegments || activeConversation.topicSegments,
-      };
-
-      await window.api.db.update(updated);
-      const refreshed = await window.api.db.list();
-      setConversations(refreshed);
-    } catch (err) {
-      console.error("Retry analysis failed:", err);
+      await runAnalysis(activeConversation.id, activeConversation.utterances, activeConversation.duration);
     } finally {
       setRetrying(false);
     }
-  }, [activeConversation, retrying]);
+  }, [activeConversation, retrying, runAnalysis]);
 
   const handleSeekTo = useCallback((timeSeconds: number) => {
     setActiveTab("conversation");
-    // Use setTimeout to ensure tab switch renders before scroll
     setTimeout(() => setScrollToTime(timeSeconds), 50);
   }, []);
 
   const handleUpload = useCallback(async () => {
+    if (!profileId) return;
     setError(null);
 
     const filePath = await window.api.pickAudioFile();
@@ -140,27 +187,6 @@ export default function App() {
     try {
       const { utterances, duration } = await window.api.transcribe(filePath);
 
-      setAppState("analyzing");
-
-      const fullText = utterances
-        .map((u: Utterance) => `[${u.start.toFixed(1)}-${u.end.toFixed(1)}] Speaker ${u.speaker + 1}: ${u.text}`)
-        .join("\n");
-
-      let analysis: {
-        topics?: Conversation["topics"];
-        summary?: string;
-        actionPoints?: Conversation["actionPoints"];
-        sentiments?: Conversation["sentiments"];
-        tags?: Conversation["tags"];
-        topicSegments?: Conversation["topicSegments"];
-      } = {};
-
-      try {
-        analysis = await window.api.analyze(fullText, duration);
-      } catch {
-        // Analysis is optional
-      }
-
       const fileName = filePath.split("/").pop()?.replace(/\.[^/.]+$/, "") || "Untitled";
 
       const conversation: Conversation = {
@@ -168,27 +194,85 @@ export default function App() {
         title: fileName,
         utterances,
         duration,
-        topics: analysis.topics || [],
-        summary: analysis.summary || "",
-        actionPoints: analysis.actionPoints || [],
-        sentiments: analysis.sentiments || [],
-        tags: analysis.tags || [],
-        topicSegments: analysis.topicSegments || [],
+        topics: [],
+        summary: "",
+        actionPoints: [],
+        sentiments: [],
+        tags: [],
+        topicSegments: [],
         speakerNames: {},
+        profileId,
         createdAt: Date.now(),
       };
 
       await window.api.db.create(conversation);
-      const refreshed = await window.api.db.list();
-      setConversations(refreshed);
+      await refreshConversations();
       setActiveId(conversation.id);
+      setActiveTab("conversation");
       setAppState("idle");
+
+      runAnalysis(conversation.id, utterances, duration);
     } catch (err) {
       console.error(err);
       setError(err instanceof Error ? err.message : "Something went wrong");
       setAppState("idle");
     }
-  }, []);
+  }, [profileId, runAnalysis, refreshConversations]);
+
+  const handleImport = useCallback(async (rawText: string, title: string) => {
+    if (!profileId) return;
+    setError(null);
+    setImporting(true);
+
+    try {
+      const { utterances, speakerNames, duration } = await window.api.parseTranscript(rawText);
+
+      if (!utterances || utterances.length === 0) {
+        throw new Error("Couldn't parse any utterances from the transcript");
+      }
+
+      // Convert speakerNames keys from string to number
+      const names: Record<number, string> = {};
+      for (const [k, v] of Object.entries(speakerNames || {})) {
+        names[parseInt(k, 10)] = v as string;
+      }
+
+      const conversation: Conversation = {
+        id: crypto.randomUUID(),
+        title,
+        utterances: utterances as Utterance[],
+        duration: duration || utterances.length * 3,
+        topics: [],
+        summary: "",
+        actionPoints: [],
+        sentiments: [],
+        tags: [],
+        topicSegments: [],
+        speakerNames: names,
+        profileId,
+        createdAt: Date.now(),
+      };
+
+      await window.api.db.create(conversation);
+      await refreshConversations();
+      setActiveId(conversation.id);
+      setActiveTab("conversation");
+      setShowImport(false);
+
+      runAnalysis(conversation.id, conversation.utterances, conversation.duration);
+    } catch (err) {
+      console.error(err);
+      setError(err instanceof Error ? err.message : "Failed to import transcript");
+    } finally {
+      setImporting(false);
+    }
+  }, [profileId, runAnalysis, refreshConversations]);
+
+  const disabledTabs: ConversationTab[] = [];
+  if (isAnalyzing) {
+    if (!activeConversation?.summary) disabledTabs.push("summary");
+    if (!activeConversation?.actionPoints?.length) disabledTabs.push("action-points");
+  }
 
   // ── Checking connection ──────────────────────────────────
   if (connState === "checking") {
@@ -211,6 +295,11 @@ export default function App() {
     );
   }
 
+  // ── Profile Selection ────────────────────────────────────
+  if (!profileId) {
+    return <ProfileSelect onProfileSelected={handleProfileSelected} />;
+  }
+
   // ── Main app ─────────────────────────────────────────────
   return (
     <div className="flex h-screen bg-[#0a0a0a] text-[#ededed]">
@@ -221,6 +310,11 @@ export default function App() {
         onNew={handleNew}
         onDelete={handleDeleteConversation}
         onRename={handleRenameConversation}
+        onLogout={handleLogout}
+        profileId={profileId}
+        profileName={profileName}
+        onProfileNameChanged={setProfileName}
+        onRefresh={refreshConversations}
       />
 
       <div className="flex-1 flex flex-col overflow-hidden">
@@ -229,12 +323,12 @@ export default function App() {
             {appState === "idle" && (
               <>
                 <h1 className="text-3xl font-bold text-zinc-100 mb-2">
-                  Meet Transcriber
+                  Comeet
                 </h1>
                 <p className="text-zinc-400 mb-8">
                   Upload a meeting recording to get a speaker-identified transcript
                 </p>
-                <FileUpload onUpload={handleUpload} isProcessing={false} />
+                <FileUpload onUpload={handleUpload} onImport={() => setShowImport(true)} isProcessing={false} />
                 {error && (
                   <p className="text-red-400 mt-4 text-sm">{error}</p>
                 )}
@@ -246,13 +340,6 @@ export default function App() {
                 <div className="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
                 <p className="text-zinc-300">Transcribing audio with Deepgram...</p>
                 <p className="text-zinc-500 text-sm">This may take a moment depending on file size</p>
-              </div>
-            )}
-
-            {appState === "analyzing" && (
-              <div className="flex flex-col items-center gap-4">
-                <div className="w-10 h-10 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin" />
-                <p className="text-zinc-300">Analyzing topics with Claude...</p>
               </div>
             )}
           </main>
@@ -271,32 +358,27 @@ export default function App() {
               </div>
             </header>
 
-            <TabBar activeTab={activeTab} onTabChange={setActiveTab} />
+            <TabBar
+              activeTab={activeTab}
+              onTabChange={setActiveTab}
+              disabledTabs={disabledTabs}
+            />
 
             <div className="flex-1 flex overflow-hidden">
-              {/* Tab content */}
-              <div className="flex-1 overflow-y-auto bg-zinc-950">
+              <div className="flex-1 overflow-y-auto bg-zinc-900/40">
                 {activeTab === "conversation" && (
                   <ChatView
                     utterances={activeConversation.utterances}
                     speakerNames={activeConversation.speakerNames}
                     onRenameSpeaker={handleRenameSpeaker}
                     scrollToTime={scrollToTime}
+                    onScrollComplete={() => setScrollToTime(null)}
                   />
                 )}
 
                 {activeTab === "action-points" && (
                   <ActionPointsView
                     actionPoints={activeConversation.actionPoints || []}
-                    onRetry={handleRetryAnalysis}
-                    retrying={retrying}
-                  />
-                )}
-
-                {activeTab === "topics" && (
-                  <TopicsView
-                    topics={activeConversation.topics}
-                    duration={activeConversation.duration}
                     onRetry={handleRetryAnalysis}
                     retrying={retrying}
                   />
@@ -314,7 +396,6 @@ export default function App() {
                 )}
               </div>
 
-              {/* Right sidebar: Topic Timeline */}
               {(activeConversation.topicSegments?.length ?? 0) > 0 && (
                 <aside className="w-64 border-l border-zinc-800 bg-zinc-900 shrink-0">
                   <TopicTimeline
@@ -328,6 +409,15 @@ export default function App() {
           </>
         )}
       </div>
+
+      <ImportTranscript
+        isOpen={showImport}
+        onClose={() => setShowImport(false)}
+        onImport={handleImport}
+        isProcessing={importing}
+      />
+
+      <UpdateBanner />
     </div>
   );
 }

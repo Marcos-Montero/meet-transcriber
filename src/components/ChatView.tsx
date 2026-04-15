@@ -17,6 +17,7 @@ interface ChatViewProps {
   speakerNames: Record<number, string>;
   onRenameSpeaker: (speaker: number, name: string) => void;
   scrollToTime?: number | null;
+  onScrollComplete?: () => void;
 }
 
 function formatTime(seconds: number): string {
@@ -49,14 +50,16 @@ export default function ChatView({
   speakerNames,
   onRenameSpeaker,
   scrollToTime,
+  onScrollComplete,
 }: ChatViewProps) {
-  const [editingSpeaker, setEditingSpeaker] = useState<number | null>(null);
-  const [editValue, setEditValue] = useState("");
+  const [renamingSpeaker, setRenamingSpeaker] = useState<number | null>(null);
+  const [renameValue, setRenameValue] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const blocks = useMemo(() => groupUtterances(utterances), [utterances]);
 
-  // Scroll to time when requested
+  // Scroll to time when requested, then clear
   useEffect(() => {
     if (scrollToTime == null || !containerRef.current) return;
     const els = containerRef.current.querySelectorAll<HTMLElement>("[data-start-time]");
@@ -73,22 +76,30 @@ export default function ChatView({
     if (closest) {
       (closest as HTMLElement).scrollIntoView({ behavior: "smooth", block: "center" });
     }
-  }, [scrollToTime]);
+    onScrollComplete?.();
+  }, [scrollToTime, onScrollComplete]);
 
-  const startEditing = useCallback(
+  // Focus input when modal opens
+  useEffect(() => {
+    if (renamingSpeaker !== null) {
+      setTimeout(() => inputRef.current?.focus(), 50);
+    }
+  }, [renamingSpeaker]);
+
+  const openRename = useCallback(
     (speaker: number) => {
-      setEditingSpeaker(speaker);
-      setEditValue(speakerNames[speaker] || `Speaker ${speaker + 1}`);
+      setRenamingSpeaker(speaker);
+      setRenameValue(speakerNames[speaker] || `Speaker ${speaker + 1}`);
     },
     [speakerNames]
   );
 
-  const commitEdit = useCallback(() => {
-    if (editingSpeaker !== null && editValue.trim()) {
-      onRenameSpeaker(editingSpeaker, editValue.trim());
+  const commitRename = useCallback(() => {
+    if (renamingSpeaker !== null && renameValue.trim()) {
+      onRenameSpeaker(renamingSpeaker, renameValue.trim());
     }
-    setEditingSpeaker(null);
-  }, [editingSpeaker, editValue, onRenameSpeaker]);
+    setRenamingSpeaker(null);
+  }, [renamingSpeaker, renameValue, onRenameSpeaker]);
 
   const getColor = (speaker: number) =>
     SPEAKER_COLORS[speaker % Object.keys(SPEAKER_COLORS).length] ??
@@ -97,57 +108,85 @@ export default function ChatView({
   const isRightAligned = (speaker: number) => speaker % 2 === 1;
 
   return (
-    <div ref={containerRef} className="flex flex-col gap-4 p-6 max-w-3xl mx-auto">
-      {blocks.map((block, i) => {
-        const color = getColor(block.speaker);
-        const right = isRightAligned(block.speaker);
-        const name =
-          speakerNames[block.speaker] || `Speaker ${block.speaker + 1}`;
+    <>
+      <div ref={containerRef} className="flex flex-col gap-4 p-6 max-w-3xl mx-auto">
+        {blocks.map((block, i) => {
+          const color = getColor(block.speaker);
+          const right = isRightAligned(block.speaker);
+          const name =
+            speakerNames[block.speaker] || `Speaker ${block.speaker + 1}`;
 
-        return (
-          <div
-            key={i}
-            data-start-time={block.start}
-            className={`flex flex-col ${right ? "items-end" : "items-start"}`}
-          >
-            <div className={`mb-1 ${right ? "text-right" : "text-left"}`}>
-              {editingSpeaker === block.speaker ? (
-                <input
-                  autoFocus
-                  value={editValue}
-                  onChange={(e) => setEditValue(e.target.value)}
-                  onBlur={commitEdit}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") commitEdit();
-                    if (e.key === "Escape") setEditingSpeaker(null);
-                  }}
-                  className="bg-zinc-700 text-zinc-200 text-xs px-2 py-1 rounded outline-none border border-zinc-500 focus:border-indigo-400"
-                />
-              ) : (
+          return (
+            <div
+              key={i}
+              data-start-time={block.start}
+              className={`flex flex-col ${right ? "items-end" : "items-start"}`}
+            >
+              <div className={`mb-1 ${right ? "text-right" : "text-left"}`}>
                 <button
-                  onClick={() => startEditing(block.speaker)}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    openRename(block.speaker);
+                  }}
                   className={`text-xs font-semibold ${color.label} hover:underline cursor-pointer`}
                 >
                   {name}
                 </button>
-              )}
+              </div>
+              <div
+                className={`max-w-[80%] px-4 py-3 rounded-2xl ${
+                  right ? "rounded-tr-sm" : "rounded-tl-sm"
+                }`}
+                style={{ backgroundColor: color.bg }}
+              >
+                <p className="text-zinc-200 text-sm leading-relaxed">
+                  {block.texts.join(" ")}
+                </p>
+                <p className={`text-zinc-500 text-[10px] mt-2 ${right ? "text-right" : ""}`}>
+                  {formatTime(block.start)} – {formatTime(block.end)}
+                </p>
+              </div>
             </div>
-            <div
-              className={`max-w-[80%] px-4 py-3 rounded-2xl ${
-                right ? "rounded-tr-sm" : "rounded-tl-sm"
-              }`}
-              style={{ backgroundColor: color.bg }}
-            >
-              <p className="text-zinc-200 text-sm leading-relaxed">
-                {block.texts.join(" ")}
-              </p>
-              <p className={`text-zinc-500 text-[10px] mt-2 ${right ? "text-right" : ""}`}>
-                {formatTime(block.start)} – {formatTime(block.end)}
-              </p>
+          );
+        })}
+      </div>
+
+      {/* Rename speaker modal */}
+      {renamingSpeaker !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-zinc-800 border border-zinc-700 rounded-2xl p-6 max-w-sm w-full mx-4 shadow-2xl">
+            <h3 className="text-base font-semibold text-zinc-100 mb-4">
+              Rename speaker
+            </h3>
+            <input
+              ref={inputRef}
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitRename();
+                if (e.key === "Escape") setRenamingSpeaker(null);
+              }}
+              placeholder="Enter name..."
+              className="w-full bg-zinc-700 text-zinc-200 px-4 py-2.5 rounded-xl outline-none border border-zinc-600 focus:border-indigo-500 text-sm mb-5"
+            />
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setRenamingSpeaker(null)}
+                className="text-sm text-zinc-400 hover:text-zinc-200 px-4 py-2 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={commitRename}
+                className="text-sm text-white bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded-lg transition-colors font-medium"
+              >
+                Save
+              </button>
             </div>
           </div>
-        );
-      })}
-    </div>
+        </div>
+      )}
+    </>
   );
 }

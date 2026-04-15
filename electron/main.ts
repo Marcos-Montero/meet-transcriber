@@ -3,6 +3,8 @@ import { app, BrowserWindow, ipcMain, dialog } from "electron";
 import * as path from "path";
 import { fileURLToPath } from "url";
 import { readFile } from "fs/promises";
+import electronUpdater from "electron-updater";
+const { autoUpdater } = electronUpdater;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -13,11 +15,20 @@ import { DeepgramClient } from "@deepgram/sdk";
 import Anthropic from "@anthropic-ai/sdk";
 import {
   initDb,
+  getProfiles,
+  verifyPin,
+  updatePin,
+  updateProfileName,
   getConversations,
   getConversation,
   createConversation,
   updateConversation,
   deleteConversation,
+  moveConversationToFolder,
+  getFolders,
+  createFolder,
+  renameFolder,
+  deleteFolder,
 } from "./db";
 import { scanForPostgres, testPostgresConnection } from "./discovery";
 import { loadConfig, saveConfig, buildConnectionString } from "./config";
@@ -26,6 +37,7 @@ let mainWindow: BrowserWindow | null = null;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
+    title: "Comeet",
     width: 1280,
     height: 800,
     minWidth: 900,
@@ -33,6 +45,7 @@ function createWindow() {
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 16, y: 16 },
     backgroundColor: "#0a0a0a",
+    icon: path.join(__dirname, "../../build/icon.png"),
     webPreferences: {
       preload: path.join(__dirname, "../preload/preload.cjs"),
       contextIsolation: true,
@@ -47,17 +60,83 @@ function createWindow() {
   }
 }
 
+// ── Auto-updater ─────────────────────────────────────────────
+autoUpdater.autoDownload = true;
+autoUpdater.autoInstallOnAppQuit = true;
+
+autoUpdater.on("update-available", (info) => {
+  mainWindow?.webContents.send("update:available", { version: info.version });
+});
+
+autoUpdater.on("download-progress", (progress) => {
+  mainWindow?.webContents.send("update:progress", {
+    percent: progress.percent,
+    transferred: progress.transferred,
+    total: progress.total,
+  });
+});
+
+autoUpdater.on("update-downloaded", (info) => {
+  mainWindow?.webContents.send("update:downloaded", { version: info.version });
+});
+
+autoUpdater.on("error", (err) => {
+  console.error("[auto-updater]", err.message);
+});
+
+ipcMain.handle("update:check", () => autoUpdater.checkForUpdates().catch(() => null));
+ipcMain.handle("update:install", () => {
+  autoUpdater.quitAndInstall();
+});
+ipcMain.handle("update:get-version", () => app.getVersion());
+
 app.whenReady().then(async () => {
   createWindow();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+
+  // Check for updates 5s after startup, then every hour
+  if (app.isPackaged) {
+    setTimeout(() => {
+      autoUpdater.checkForUpdates().catch((err) => console.error("[auto-updater] Initial check failed:", err));
+    }, 5000);
+    setInterval(() => {
+      autoUpdater.checkForUpdates().catch(() => {});
+    }, 60 * 60 * 1000);
+  }
 });
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
+
+// ── Profiles ─────────────────────────────────────────────────
+ipcMain.handle("profiles:list", () => getProfiles());
+ipcMain.handle("profiles:verify-pin", (_e, profileId: string, pin: string) =>
+  verifyPin(profileId, pin)
+);
+ipcMain.handle("profiles:update-pin", (_e, profileId: string, newPin: string) =>
+  updatePin(profileId, newPin)
+);
+ipcMain.handle("profiles:update-name", (_e, profileId: string, name: string) =>
+  updateProfileName(profileId, name)
+);
+
+// ── Database CRUD ────────────────────────────────────────────
+ipcMain.handle("db:list", (_e, profileId: string) => getConversations(profileId));
+ipcMain.handle("db:get", (_e, id: string) => getConversation(id));
+ipcMain.handle("db:create", (_e, conv) => createConversation(conv));
+ipcMain.handle("db:update", (_e, conv) => updateConversation(conv));
+ipcMain.handle("db:delete", (_e, id: string) => deleteConversation(id));
+ipcMain.handle("db:move-to-folder", (_e, convId: string, folderId: string | null) => moveConversationToFolder(convId, folderId));
+
+// ── Folders ──────────────────────────────────────────────────
+ipcMain.handle("folders:list", (_e, profileId: string) => getFolders(profileId));
+ipcMain.handle("folders:create", (_e, folder) => createFolder(folder));
+ipcMain.handle("folders:rename", (_e, id: string, name: string) => renameFolder(id, name));
+ipcMain.handle("folders:delete", (_e, id: string) => deleteFolder(id));
 
 // ── NAS Discovery & Config ──────────────────────────────────
 ipcMain.handle("nas:discover", async () => {
@@ -103,6 +182,61 @@ ipcMain.handle("pick-audio-file", async () => {
   });
   if (result.canceled || result.filePaths.length === 0) return null;
   return result.filePaths[0];
+});
+
+// ── Parse text transcript ────────────────────────────────────
+ipcMain.handle("parse-transcript", async (_event, rawText: string) => {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
+
+  const client = new Anthropic({ apiKey });
+
+  const message = await client.messages.create({
+    model: "claude-sonnet-4-6",
+    max_tokens: 8192,
+    messages: [
+      {
+        role: "user",
+        content: `You are a transcript parser. Parse this transcript into a structured JSON format.
+
+The transcript may be in any format (Zoom VTT, Google Meet, Teams export, plain text with "Name: text" pattern, etc.). Extract:
+1. Each utterance (what was said, by whom, and when)
+2. Speaker names (if they appear as real names, keep them; if generic like "Speaker 1", use index)
+
+Rules:
+- Assign each unique speaker an integer index starting from 0
+- If timestamps are present, convert them to seconds from start (e.g., "00:01:30" → 90)
+- If NO timestamps exist, distribute utterances evenly: estimate ~3 seconds per utterance, so utterance N has start=N*3 and end=(N+1)*3
+- Consecutive lines from the same speaker should be separate utterances (we'll group them in the UI)
+- Clean up filler like "[inaudible]", "[crosstalk]" but keep the actual content
+- The "speakerNames" map should use speaker index as key (as string) and the real name as value (e.g., {"0": "Alice", "1": "Bob"}). If only generic labels exist, omit that speaker from the map.
+
+Respond with ONLY valid JSON, no markdown code fences:
+
+{
+  "utterances": [
+    { "speaker": 0, "text": "Hello everyone", "start": 0, "end": 3 },
+    { "speaker": 1, "text": "Hi Alice", "start": 3, "end": 6 }
+  ],
+  "speakerNames": { "0": "Alice", "1": "Bob" },
+  "duration": 90
+}
+
+Transcript to parse:
+${rawText}`,
+      },
+    ],
+  });
+
+  let text = message.content[0].type === "text" ? message.content[0].text : "";
+  text = text.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
+  const parsed = JSON.parse(text);
+
+  return {
+    utterances: parsed.utterances || [],
+    speakerNames: parsed.speakerNames || {},
+    duration: parsed.duration || 0,
+  };
 });
 
 // ── Transcribe ───────────────────────────────────────────────
@@ -196,7 +330,9 @@ ${transcript}`,
     ],
   });
 
-  const text = message.content[0].type === "text" ? message.content[0].text : "";
+  let text = message.content[0].type === "text" ? message.content[0].text : "";
+  // Strip markdown code fences if Claude wraps the JSON
+  text = text.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
   const parsed = JSON.parse(text);
 
   const topicColorMap: Record<string, string> = {};
@@ -226,10 +362,3 @@ ${transcript}`,
     tags: parsed.tags || [],
   };
 });
-
-// ── Database CRUD ────────────────────────────────────────────
-ipcMain.handle("db:list", () => getConversations());
-ipcMain.handle("db:get", (_e, id: string) => getConversation(id));
-ipcMain.handle("db:create", (_e, conv) => createConversation(conv));
-ipcMain.handle("db:update", (_e, conv) => updateConversation(conv));
-ipcMain.handle("db:delete", (_e, id: string) => deleteConversation(id));
