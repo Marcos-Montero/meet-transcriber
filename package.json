@@ -69,7 +69,8 @@
     "publish": {
       "provider": "github",
       "owner": "Marcos-Montero",
-      "repo": "meet-transcriber"
+      "repo": "meet-transcriber",
+      "releaseType": "release"
     }
   }
 }
